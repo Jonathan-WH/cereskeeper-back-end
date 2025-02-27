@@ -1,3 +1,4 @@
 #Remove environnement files
 environnements/cereskeeper-firebase-adminsdk-fbsvc-2f1b5677b7.json
 
+.env
