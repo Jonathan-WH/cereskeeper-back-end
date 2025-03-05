@@ -55,9 +55,10 @@ print(f"🔑 Clé API Firebase chargée: {FIREBASE_API_KEY}")
 def register():
     try:
         data = request.json
-        email = data.get('email')
-        password = data.get('password')
-        username = data.get('username')
+        email = data.get('email').strip()
+        password = data.get('password').strip()
+        username = data.get('username').strip()
+        confirm_password = data.get('confirmPassword').strip()
 
         if not email or not password or not username:
             return jsonify({"error": "Missing required fields"}), 400
@@ -71,6 +72,10 @@ def register():
         password_regex = r'^(?=.*[A-Z])(?=.*\d)(?=.*[\W_]).{8,}$'
         if not re.match(password_regex, password):
             return jsonify({"error": "Password must contain at least 8 characters, one uppercase letter, one number, and one special character."}), 400
+        
+         # Vérifier que le mot de passe et la confirmation correspondent
+        if password != confirm_password:
+            return jsonify({"error": "Passwords do not match"}), 400
 
         # 🔍 Vérification du username
         if len(username) < 8:
@@ -123,8 +128,8 @@ def register():
 def login():
     try:
         data = request.json
-        email = data.get('email')
-        password = data.get('password')
+        email = data.get('email').strip()
+        password = data.get('password').strip()
 
         if not email or not password:
             return jsonify({"error": "Missing email or password"}), 400
@@ -259,7 +264,6 @@ def upload_image():
         print("❌ Erreur inattendue dans upload_image:", str(e))
         return jsonify({"error": str(e)}), 500
 
-# ✅ 📌 Route pour analyser la plante via GPT-4o
 @app.route('/analyze-plant', methods=['POST'])
 def analyze_plant():
     try:
@@ -267,25 +271,161 @@ def analyze_plant():
         print("📥 Data received for analysis:", data)
 
         image_urls = data.get('image_urls', [])
-        plant_name = data.get('plant_name', 'Unknown')
-        plant_context = data.get('plant_context', 'No details provided.')
+        environment = data.get('environment', 'Not specified')
+        variety = data.get('variety', 'Unknown')
+        symptoms = data.get('symptoms', 'No symptoms reported')
+        user_id = data.get('user_id')  # 🔥 Récupération de l'UID utilisateur
 
         if not image_urls:
             return jsonify({"error": "No image URLs provided"}), 400
 
         # 🔍 Construire la requête pour GPT-4o
         image_data = [{"type": "image_url", "image_url": {"url": url}} for url in image_urls]
+
         messages = [
-            {"role": "user", "content": [
-                {"type": "text", "text": f"Identify the plant problem based on these images. Name: {plant_name}. Context: {plant_context}"},
-                *image_data
-            ]}
-        ]
+      {"role": "user", "content": [
+        {"type": "text", "text": f"""
+        You are an experienced horticulturist.
+        Analyze the following images to detect any potential issues with the plant.
+        • Environment: {environment}
+        • Variety: {variety}
+        • Observed symptoms: {symptoms}
+
+        If a problem is detected, provide a clear response with:
+        • 📌 Name of the issue
+        • 🛠 Detailed explanation of the problem and its causes
+        • 🚨 Possible consequences if left untreated
+        • 🏡 100% organic and biological solution
+        • 🧪 Chemical solution
+        • 🌿 Hybrid solution (organic + chemical)
+
+        If no issue is detected, simply respond: "No problems detected. Try a new analysis with different photos."
+
+        📌 **Response Format (Important!)**:
+        - Provide the answer **strictly in valid Ionic HTML format** using `<ion-card>`, `<ion-card-header>`, `<ion-card-title>`, and `<ion-card-content>`.
+        - Do **not** include explanations outside of this structure.
+        📌 **Response Format (Important!):**
+        - **Do not use Markdown. Do not format text with `**bold**`. Provide plain HTML only.**
+        - Example response format:
+        
+        ```html
+        <ion-card color="success" mode="ios">
+            <ion-card-header>
+                <ion-card-title>Plant Analysis Result</ion-card-title>
+                <ion-card-subtitle>Healthy Plant</ion-card-subtitle>
+            </ion-card-header>
+            <ion-card-content>
+                No problems detected. Try a new analysis with different photos.
+            </ion-card-content>
+        </ion-card>
+
+       <ion-card color="danger" class="card-analyse" mode="ios">
+    <ion-card-header>
+      <ion-card-title class="ion-text-center orbitron_medium">
+        Detected Issue: Rust Disease
+      </ion-card-title>
+      <ion-card-subtitle class="ion-text-center subtile-analyse orbitron_medium">
+        Fungal Disease
+      </ion-card-subtitle>
+    </ion-card-header>
+
+    <ion-card-content>
+      <ion-list>
+        <!-- Description du problème -->
+        <ion-item>
+          <ion-label>
+            <h2 class="orbitron_bold"> What is Rust Disease?</h2>
+            <p class="white">
+              Rust disease is a fungal infection caused by various species of fungi from the Pucciniales order. 
+              It manifests as small, yellow-orange pustules on the undersides of leaves, which later turn brown and release powdery spores. 
+              The disease thrives in warm, humid conditions and spreads rapidly through windborne spores that can infect healthy plants. 
+              It primarily affects cereal crops, ornamental plants, and some vegetables, reducing their photosynthesis capacity and overall health.
+            </p>
+          </ion-label>
+        </ion-item>
+
+        <!-- Conséquences -->
+        <ion-item>
+          <ion-label>
+            <h2 class="orbitron_bold">Consequences</h2>
+            <p class="white">
+              If left untreated, rust disease can cause severe defoliation, weakening the plant and making it more susceptible to secondary infections and environmental stress. 
+              Affected plants experience reduced photosynthesis, leading to slower growth, lower crop yields, and, in extreme cases, plant death. 
+              In agricultural settings, rust infections can result in significant economic losses, particularly in wheat, coffee, and soybean production. 
+              The disease can also spread between different plant species, making containment and management crucial for plant health.
+            </p>
+          </ion-label>
+        </ion-item>
+
+        <!-- Solutions -->
+        <ion-item>
+          <ion-label>
+            <h2 class="orbitron_bold">Organic Solution</h2>
+            <p class="white">
+              The most effective organic approach involves **early detection** and **preventive action**. 
+              Remove and destroy infected leaves immediately to prevent further spore dispersal.<br>
+              Apply a **neem oil spray** or a **baking soda solution (1 tsp per liter of water)**, which alters the leaf surface pH and inhibits fungal growth.<br>
+              Use a **garlic or horsetail tea spray**, known for their natural antifungal properties.<br>
+              Improve plant spacing and air circulation to reduce humidity and fungal spread.<br>
+              Enhance soil health by adding **compost tea or seaweed extracts**, which boost plant immunity.
+            </p>
+          </ion-label>
+        </ion-item>
+
+        <ion-item>
+          <ion-label>
+            <h2 class="orbitron_bold">Chemical Solution</h2>
+            <p class="white">
+              Use a **fungicide containing myclobutanil, propiconazole, or tebuconazole**, as these are highly effective against rust fungi.<br>
+              Follow manufacturer guidelines strictly, as overuse can lead to **fungal resistance**.<br>
+              Apply the fungicide in **early morning or late evening** to prevent leaf burn and maximize absorption.<br>
+              Rotate between different fungicide classes to prevent the fungi from developing resistance.
+            </p>
+          </ion-label>
+        </ion-item>
+
+        <ion-item>
+          <ion-label>
+            <h2 class="orbitron_bold">Hybrid Solution</h2>
+            <p class="white">
+              Begin treatment with **neem oil** or **baking soda spray** for mild infections.<br>
+              If the infection progresses, alternate between a **low-toxicity fungicide (copper-based)** and an organic spray to minimize chemical dependency.<br>
+              Combine soil amendment strategies like **adding beneficial microbes (mycorrhizae, Trichoderma)** to boost plant defenses.<br>
+              Adjust watering schedules to **morning hours only**, reducing humidity levels at night when fungal spores are most active.
+            </p>
+          </ion-label>
+        </ion-item>
+
+        <!-- Prévention -->
+        <ion-item lines="none">
+          <ion-label>
+            <h2 class="orbitron_bold">Prevention Tips</h2>
+            <p class="white">
+              Prevention is the most effective strategy to **avoid rust outbreaks**:<br>
+              Ensure proper **air circulation** around plants by pruning overcrowded foliage.<br>
+              Avoid overhead watering, as wet leaves create ideal conditions for fungal spores.<br>
+              Regularly **apply compost or organic mulch** to maintain soil health and improve plant immunity.<br>
+              Rotate crops every season to prevent rust fungi from persisting in the soil.<br>
+              Monitor plants regularly for early signs of infection and take immediate action if needed.
+            </p>
+          </ion-label>
+        </ion-item>
+      </ion-list>
+    </ion-card-content>
+</ion-card>
+
+        ```
+
+        Return the response strictly following this format.
+        """},
+        *image_data
+    ]}
+]
 
         payload = {
             "model": "gpt-4o",
             "messages": messages,
-            "max_tokens": 300
+            "max_tokens": 1500
         }
 
         headers = {
@@ -295,18 +435,30 @@ def analyze_plant():
 
         print("📡 Sending request to OpenAI with payload:", payload)
 
-        # 📡 Envoyer la requête à OpenAI
         response = py_request.post("https://api.openai.com/v1/chat/completions", json=payload, headers=headers)
 
         if response.status_code != 200:
             print("❌ OpenAI response error:", response.json())
             return jsonify({"error": "OpenAI request failed", "details": response.json()}), 500
 
-        # ✅ Retourner l'analyse
         result = response.json()
         analysis_text = result['choices'][0]['message']['content']
 
-        return jsonify({"analysis": analysis_text, "image_urls": image_urls})
+         # ✅ Création de l'objet d'analyse
+        analysis_data = {
+            "title": "🌿 Plant Analysis Report",
+            "date": datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
+            "images": image_urls,
+            "problem_found": "✅ A problem was detected" if "problem" in analysis_text.lower() else "❌ No major issues detected",
+            "analysis": analysis_text 
+            }
+
+         # ✅ Stocker l'analyse dans Firestore sous l'utilisateur concerné
+        analysis_ref = db.collection("users").document(user_id).collection("analysis").add(analysis_data)
+
+        print(f"✅ Analysis stored in Firestore for user: {user_id}")
+
+        return jsonify(analysis_data), 200
 
     except Exception as e:
         print("❌ Unexpected error in analyze_plant:", str(e))
@@ -315,7 +467,7 @@ def analyze_plant():
 @app.route('/update-profile', methods=['POST'])
 def update_profile():
     try:
-        # 📌 Vérifier le token JWT Firebase dans l'en-tête de la requête
+        # ✅ Vérifier le token JWT Firebase dans l'en-tête de la requête
         auth_header = request.headers.get("Authorization")
         if not auth_header:
             return jsonify({"error": "Missing Authorization Header"}), 401
@@ -324,12 +476,14 @@ def update_profile():
         decoded_token = auth.verify_id_token(token)
         uid = decoded_token['uid']
 
-        # 📌 Récupérer les données envoyées depuis le frontend
+        # ✅ Récupérer les données envoyées depuis le frontend
         data = request.json
-        email = data.get('email')
-        username = data.get('username')
-        password = data.get('password')
-        confirm_password = data.get('confirmPassword')
+
+        # ✅ Vérifier si chaque champ est présent avant d'appliquer `.strip()`
+        email = data.get('email', '').strip() if data.get('email') else None
+        username = data.get('username', '').strip() if data.get('username') else None
+        password = data.get('password') if data.get('password') else None
+        confirm_password = data.get('confirmPassword') if data.get('confirmPassword') else None
 
         # ✅ Récupérer l'utilisateur Firebase
         user_ref = db.collection("users").document(uid)
@@ -343,10 +497,10 @@ def update_profile():
         current_email = user_data.get("email")
         current_username = user_data.get("username")
 
-        # 📌 Préparer les mises à jour
+        # 📌 Préparer les mises à jour (on ne modifie que ce qui a changé)
         updates = {}
 
-        # 🔍 Vérification & Mise à jour de l'email
+        # 🔍 Vérification & Mise à jour de l'email uniquement si l'utilisateur l'a changé
         if email and email != current_email:
             email_regex = r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$'
             if not re.match(email_regex, email):
@@ -356,11 +510,10 @@ def update_profile():
                 auth.get_user_by_email(email)  # 🔍 Vérifie si l'email est déjà utilisé
                 return jsonify({"error": "Email already exists"}), 400
             except firebase_admin.auth.UserNotFoundError:
-                # ✅ Si l'email n'existe pas déjà, on le met à jour
                 auth.update_user(uid, email=email)
                 updates['email'] = email
 
-        # 🔍 Vérification & Mise à jour du username
+        # 🔍 Vérification & Mise à jour du username uniquement si l'utilisateur l'a changé
         if username and username != current_username:
             username_regex = r'^[a-zA-Z0-9]{8,}$'  # Min 8 caractères, lettres et chiffres uniquement
             if not re.match(username_regex, username):
@@ -374,7 +527,7 @@ def update_profile():
             auth.update_user(uid, display_name=username)
             updates['username'] = username
 
-        # 🔍 Vérification & Mise à jour du mot de passe
+        # 🔍 Vérification & Mise à jour du mot de passe uniquement si l'utilisateur en a entré un
         if password:
             password_regex = r'^(?=.*[A-Z])(?=.*\d)(?=.*[\W_]).{8,}$'
             if not re.match(password_regex, password):
@@ -397,6 +550,263 @@ def update_profile():
     except Exception as e:
         print("❌ Error updating profile:", str(e))
         return jsonify({"error": str(e)}), 500
+    
+
+# ✅ 📌 Route de récupération de l'historique d'analyses
+@app.route('/get-analysis-history', methods=['GET'])
+def get_analysis_history():
+    try:
+        # ✅ Vérifier le token Firebase dans les headers
+        auth_header = request.headers.get("Authorization")
+        if not auth_header:
+            return jsonify({"error": "Missing Authorization Header"}), 401
+
+        token = auth_header.split(" ")[1]
+
+        # ✅ Décoder le token Firebase
+        decoded_token = auth.verify_id_token(token)
+        uid = decoded_token.get('uid')
+
+        if not uid:
+            return jsonify({"error": "Invalid token"}), 401
+
+        # ✅ Récupérer les analyses depuis Firestore
+        user_ref = db.collection("users").document(uid).collection("analysis")
+        analyses = user_ref.stream()
+
+        results = []
+        for analysis in analyses:
+            data = analysis.to_dict()
+            data['id'] = analysis.id
+            results.append(data)
+
+        return jsonify(results), 200
+
+    except Exception as e:
+        print("❌ Error fetching analysis history:", str(e))
+        return jsonify({"error": str(e)}), 500
+
+
+# ✅ 📌 Route de suppression d'une analyse
+import firebase_admin
+from firebase_admin import credentials, firestore, storage  # 🔥 Import Firebase Storage
+
+# ✅ 📌 Route de suppression d'une analyse
+@app.route('/delete-analysis', methods=['DELETE'])
+def delete_analysis():
+    try:
+        analysis_id = request.args.get('analysisId')
+        uid = request.args.get('uid')
+
+        if not analysis_id or not uid:
+            print("❌ Missing parameters in request:", request.args)
+            return jsonify({"error": "Missing parameters"}), 400
+
+        # 🔥 Récupérer la référence de l'analyse
+        analysis_ref = db.collection("users").document(uid).collection("analysis").document(analysis_id)
+        analysis_doc = analysis_ref.get()
+
+        if not analysis_doc.exists:
+            return jsonify({"error": "Analysis not found"}), 404
+
+        analysis_data = analysis_doc.to_dict()
+        image_urls = analysis_data.get("images", [])
+
+        # 🔥 Supprimer les images associées dans Firebase Storage
+        bucket = storage.bucket()
+        for image_url in image_urls:
+           # 🔥 Extraire le chemin après le bucket (le dossier "plants/...")
+            path = "/".join(image_url.split('/')[-2:])  # Récupère seulement "plants/nom_du_fichier.jpg"
+
+            blob = bucket.blob(path)
+
+            if blob.exists():
+                blob.delete()
+                print(f"✅ Image supprimée : {path}")
+            else:
+                print(f"⚠️ Image introuvable (chemin incorrect) : {path}")
+
+        # 🔥 Supprimer l'analyse de Firestore après la suppression des images
+        analysis_ref.delete()
+
+        return jsonify({"message": "Analysis and associated images deleted successfully"}), 200
+
+    except Exception as e:
+        print("❌ Error deleting analysis:", str(e))
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/create-garden', methods=['POST'])
+def create_garden():
+    try:
+        # ✅ Vérification de l'authentification
+        auth_header = request.headers.get("Authorization")
+        if not auth_header:
+            return jsonify({"error": "Missing Authorization Header"}), 401
+
+        token = auth_header.split(" ")[1]
+        decoded_token = auth.verify_id_token(token)
+        uid = decoded_token.get('uid')
+
+        if not uid:
+            return jsonify({"error": "Invalid token"}), 401
+
+        # ✅ Récupération des données du formulaire
+        data = request.json
+        name = data.get('name')
+        start_date = data.get('startDate')
+        garden_type = data.get('type')
+        postal_code = data.get('postalCode', None)
+        location = data.get('location', None)
+
+        if not name or not start_date or not garden_type:
+            return jsonify({"error": "Missing required fields"}), 400
+
+        # ✅ Création de l'objet jardin
+        garden_data = {
+            "name": name,
+            "startDate": start_date,
+            "type": garden_type,
+            "postalCode": postal_code,
+            "location": location,
+            "createdAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "userId": uid
+        }
+
+        # ✅ Ajout du jardin dans Firestore
+        garden_ref = db.collection("users").document(uid).collection("gardens").add(garden_data)
+
+        garden_id = garden_ref[1].id  # Récupérer l'ID du jardin créé
+
+        print(f"✅ Garden created: {garden_data}")
+
+        # ✅ Création automatique du dossier "meteo_data" dans le jardin
+        weather_collection_ref = db.collection("users").document(uid).collection("gardens").document(garden_id).collection("weather_data")
+
+        weather_collection_ref.add({"message": "Default weather folder created", "createdAt": datetime.datetime.now(datetime.timezone.utc).isoformat()})
+
+        # ✅ Création automatique du dossier "capteurs" dans le jardin
+        sensor_collection_ref = db.collection("users").document(uid).collection("gardens").document(garden_id).collection("sensors")
+
+        sensor_collection_ref.add({"message": "Default sensor folder created", "createdAt": datetime.datetime.now(datetime.timezone.utc).isoformat()})
+
+        return jsonify({"message": "Garden created successfully", "gardenId": garden_ref[1].id}), 201
+
+    except Exception as e:
+        print("❌ Error creating garden:", str(e))
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/get-user-gardens', methods=['GET'])
+def get_user_gardens():
+    try:
+        # ✅ Vérification de l'authentification
+        auth_header = request.headers.get("Authorization")
+        if not auth_header:
+            return jsonify({"error": "Missing Authorization Header"}), 401
+
+        token = auth_header.split(" ")[1]
+        decoded_token = auth.verify_id_token(token)
+        uid = decoded_token.get('uid')
+
+        if not uid:
+            return jsonify({"error": "Invalid token"}), 401
+
+        # ✅ Récupérer les jardins de l'utilisateur
+        user_ref = db.collection("users").document(uid).collection("gardens")
+        gardens = user_ref.stream()
+
+        results = []
+        for garden in gardens:
+            data = garden.to_dict()
+            data['id'] = garden.id
+            results.append(data)
+
+        return jsonify(results), 200
+
+    except Exception as e:
+        print("❌ Error fetching gardens:", str(e))
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/get-garden', methods=['GET'])
+def get_garden():
+    try:
+        auth_header = request.headers.get("Authorization")
+        if not auth_header:
+            return jsonify({"error": "Missing Authorization Header"}), 401
+
+        token = auth_header.split(" ")[1]
+        decoded_token = auth.verify_id_token(token)
+        uid = decoded_token.get('uid')
+
+        if not uid:
+            return jsonify({"error": "Invalid token"}), 401
+
+        garden_id = request.args.get('gardenId')
+        if not garden_id:
+            return jsonify({"error": "Missing garden ID"}), 400
+
+        # ✅ Récupérer les données du jardin
+        garden_ref = db.collection("users").document(uid).collection("gardens").document(garden_id)
+        garden_doc = garden_ref.get()
+
+        if not garden_doc.exists:
+            return jsonify({"error": "Garden not found"}), 404
+
+        return jsonify(garden_doc.to_dict()), 200
+
+    except Exception as e:
+        print("❌ Error fetching garden details:", str(e))
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/delete-garden', methods=['DELETE'])
+def delete_garden():
+    try:
+        auth_header = request.headers.get("Authorization")
+        if not auth_header:
+            return jsonify({"error": "Missing Authorization Header"}), 401
+
+        token = auth_header.split(" ")[1]
+        decoded_token = auth.verify_id_token(token)
+        uid = decoded_token.get('uid')
+
+        if not uid:
+            return jsonify({"error": "Invalid token"}), 401
+
+        garden_id = request.args.get('gardenId')
+        if not garden_id:
+            return jsonify({"error": "Missing garden ID"}), 400
+
+        # ✅ Référence du jardin
+        garden_ref = db.collection("users").document(uid).collection("gardens").document(garden_id)
+
+        # ✅ Vérifier si le jardin existe
+        if not garden_ref.get().exists:
+            return jsonify({"error": "Garden not found"}), 404
+
+        # ✅ Supprimer toutes les sous-collections (sensors)
+        sensors_ref = garden_ref.collection("sensors")
+        sensors = sensors_ref.stream()
+        for sensor in sensors:
+            sensors_ref.document(sensor.id).delete()
+
+        # ✅ Supprimer toutes les sous-collections (weather_data)
+        weather_ref = garden_ref.collection("weather_data")
+        weather_data = weather_ref.stream()
+        for weather in weather_data:
+            weather_ref.document(weather.id).delete()
+
+        # ✅ Supprimer le jardin après avoir vidé les capteurs
+        garden_ref.delete()
+
+        print(f"✅ Garden and sensors deleted: {garden_id}")
+
+        return jsonify({"message": "Garden and associated sensors deleted successfully"}), 200
+
+    except Exception as e:
+        print("❌ Error deleting garden:", str(e))
+        return jsonify({"error": str(e)}), 500
+
+
 
 # ✅ 📌 Route d'accueil
 @app.route("/", methods=["GET"])
