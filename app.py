@@ -12,6 +12,9 @@ import io
 import requests as py_request
 import requests
 from dotenv import load_dotenv
+import json
+import pytz
+
 
 # 📌 Récupérer le chemin du dossier contenant ce fichier
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -49,6 +52,12 @@ jwt = JWTManager(app)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 FIREBASE_API_KEY = os.getenv("Firebase_API_KEY")
 print(f"🔑 Clé API Firebase chargée: {FIREBASE_API_KEY}")
+
+# Config Meteomatics (à remplacer par tes credentials)
+METEOMATICS_USERNAME = os.getenv("METEOMATICS_USERNAME")
+METEOMATICS_PASSWORD = os.getenv("METEOMATICS_PASSWORD")
+METEOMATICS_BASE_URL = "https://api.meteomatics.com"
+print(f"🔑 Meteomatics Credentials: {METEOMATICS_USERNAME}, {METEOMATICS_PASSWORD}")
 
 # ✅ 📌 Route d'inscription (Register)
 @app.route('/register', methods=['POST'])
@@ -741,9 +750,11 @@ def get_garden():
         if not uid:
             return jsonify({"error": "Invalid token"}), 401
 
-        garden_id = request.args.get('gardenId')
+        garden_id = request.args.get('id')  # ✅ L'ID est d'abord récupéré
         if not garden_id:
             return jsonify({"error": "Missing garden ID"}), 400
+
+        print("📌 Garden ID reçu par Flask:", garden_id)  # ✅ Debug après l'assignation
 
         # ✅ Récupérer les données du jardin
         garden_ref = db.collection("users").document(uid).collection("gardens").document(garden_id)
@@ -806,7 +817,352 @@ def delete_garden():
         print("❌ Error deleting garden:", str(e))
         return jsonify({"error": str(e)}), 500
 
+# route de mise à jour des données météo
+@app.route('/update-weather-data', methods=['POST'])
+def update_weather_data():
+    try:
+        auth_header = request.headers.get("Authorization")
+        if not auth_header:
+            return jsonify({"error": "Missing Authorization Header"}), 401
 
+        token = auth_header.split(" ")[1]
+        decoded_token = auth.verify_id_token(token)
+        uid = decoded_token.get('uid')
+
+        if not uid:
+            return jsonify({"error": "Invalid token"}), 401
+
+        data = request.json
+        garden_id = data.get("gardenId")
+
+        if not garden_id:
+            return jsonify({"error": "Missing garden ID"}), 400
+
+        garden_ref = db.collection("users").document(uid).collection("gardens").document(garden_id)
+        garden_doc = garden_ref.get()
+
+        if not garden_doc.exists:
+            return jsonify({"error": "Garden not found"}), 404
+
+        garden_data = garden_doc.to_dict()
+        garden_type = garden_data.get("type")
+        location = garden_data.get("location")
+        start_date = garden_data.get("startDate")
+
+        if garden_type != "outdoor":
+            return jsonify({"error": "Weather data is only available for outdoor gardens"}), 400
+
+        if not location:
+            return jsonify({"error": "Missing location data (lat/lon required)"}), 400
+
+        lat = location.get("lat")
+        lon = location.get("lon")
+
+        if not lat or not lon:
+            return jsonify({"error": "Invalid location data (lat/lon required)"}), 400
+    
+
+        today = datetime.datetime.now(pytz.utc)
+
+        # 🔥 Vérifier la dernière mise à jour
+        weather_data_ref = garden_ref.collection("weather_data").document("last_update")
+        last_update_doc = weather_data_ref.get()
+
+        if last_update_doc.exists:
+            last_update = last_update_doc.to_dict().get("lastUpdate")
+        else:
+            last_update = start_date
+        
+        # 🔥 Convertir last_update en datetime UTC-aware
+        last_update_date = datetime.datetime.fromisoformat(last_update)
+        if last_update_date.tzinfo is None:
+            last_update_date = last_update_date.replace(tzinfo=pytz.utc)
+
+        print(f"📌 Last update date: {last_update_date}")
+        print(f"📌 Today date: {today}")
+
+        if last_update_date >= today:
+            return jsonify({"message": "Weather data is already up to date"}), 200
+
+        # 🔥 Forcer les heures à des valeurs fixes : 00:00, 01:00, 02:00, ..., jusqu'à l'heure actuelle
+        start_fetch = last_update_date.replace(minute=0, second=0, microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+        end_fetch = today.replace(minute=0, second=0, microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # 🔥 Paramètres météo demandés
+        params = "t_2m:C,relative_humidity_2m:p,msl_pressure:hPa,uv:idx,weather_symbol_1h:idx"
+        weather_url = f"{METEOMATICS_BASE_URL}/{start_fetch}--{end_fetch}:PT1H/{params}/{lat},{lon}/json"
+
+        try:
+            response = requests.get(weather_url, auth=(METEOMATICS_USERNAME, METEOMATICS_PASSWORD))
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Error fetching weather data from Meteomatics: {str(e)}")
+            return jsonify({"error": "Failed to fetch weather data from Meteomatics", "details": str(e)}), 500
+
+        weather_data = response.json()
+        print("🔍 Données Meteomatics brutes :", weather_data)
+
+        # 🔥 Structurer les données par JOUR
+        structured_data = {}
+
+        for entry in weather_data.get("data", []):
+            parameter = entry["parameter"]
+            for coordinate in entry["coordinates"]:
+                for date_entry in coordinate["dates"]:
+                    full_date = datetime.datetime.fromisoformat(date_entry["date"][:-1])  # Convertir la date
+                    full_date = full_date.replace(tzinfo=pytz.utc)  # Assurer UTC
+
+                    date = full_date.strftime("%Y-%m-%d")  # YYYY-MM-DD
+                    time = full_date.strftime("%H:%M")  # HH:MM
+
+                    # 🔥 Ne garder que les entrées qui sont exactement à HH:00
+                    if time[-2:] != "00":
+                        continue  
+
+                    value = date_entry["value"]
+
+                    if date not in structured_data:
+                        structured_data[date] = {"date": date, "data": []}
+
+                    time_entry = next((d for d in structured_data[date]["data"] if d["time"] == time), None)
+                    if not time_entry:
+                        time_entry = {"time": time}
+                        structured_data[date]["data"].append(time_entry)
+
+                    # Associer la valeur au bon paramètre
+                    if parameter == "t_2m:C":
+                        time_entry["temperature"] = value
+                    elif parameter == "relative_humidity_2m:p":
+                        time_entry["humidity"] = value
+                    elif parameter == "msl_pressure:hPa":
+                        time_entry["pressure"] = value
+                    elif parameter == "uv:idx":
+                        time_entry["uv_index"] = value
+                    elif parameter == "weather_symbol_1h:idx":
+                        time_entry["weather_symbol"] = value
+
+        print(f"📝 Données avant stockage :", structured_data)
+
+        # 🔥 Stocker les données par JOUR dans Firestore
+        for date, values in structured_data.items():
+            weather_doc = garden_ref.collection("weather_data").document(date)
+
+            # Récupérer les données existantes
+            existing_doc = weather_doc.get()
+            existing_data = existing_doc.to_dict().get("data", []) if existing_doc.exists else []
+
+            # Fusionner les nouvelles entrées uniquement si elles ne sont pas déjà là
+            existing_times = {entry["time"] for entry in existing_data}
+            new_entries = [entry for entry in values["data"] if entry["time"] not in existing_times]
+
+            if new_entries:
+                print(f"✅ Ajout de {len(new_entries)} nouvelles entrées pour {date}")
+
+                # Mise à jour complète avec merge=True
+                updated_data = existing_data + new_entries
+                weather_doc.set({"date": date, "data": updated_data}, merge=True)  
+            else:
+                print(f"⏳ Aucune nouvelle donnée à ajouter pour {date}, toutes les heures sont déjà enregistrées.")
+
+        # 🔥 Mettre à jour la dernière date de mise à jour
+        weather_data_ref.set({"lastUpdate": today.isoformat()})
+
+        return jsonify({"message": "Weather data updated successfully"}), 200
+
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"❌ Error updating weather data: {str(e)}")
+        print(f"🔍 Stack Trace:\n{error_details}")
+        return jsonify({"error": str(e), "traceback": error_details}), 500
+
+#metéo en direct
+@app.route('/live-weather', methods=['POST'])
+def live_weather():
+    try:
+        auth_header = request.headers.get("Authorization")
+        if not auth_header:
+            return jsonify({"error": "Missing Authorization Header"}), 401
+
+        token = auth_header.split(" ")[1]
+        decoded_token = auth.verify_id_token(token)
+        uid = decoded_token.get('uid')
+
+        if not uid:
+            return jsonify({"error": "Invalid token"}), 401
+
+        data = request.json
+        garden_id = data.get("gardenId")
+
+        if not garden_id:
+            return jsonify({"error": "Missing garden ID"}), 400
+
+        garden_ref = db.collection("users").document(uid).collection("gardens").document(garden_id)
+        garden_doc = garden_ref.get()
+
+        if not garden_doc.exists:
+            return jsonify({"error": "Garden not found"}), 404
+
+        garden_data = garden_doc.to_dict()
+        location = garden_data.get("location")
+
+        # ✅ Nouveau contrôle basé sur latitude et longitude
+        if not location or "lat" not in location or "lon" not in location:
+            return jsonify({"error": "Live weather is only available for gardens with a valid location (lat/lon)."}), 400
+
+        lat = location["lat"]
+        lon = location["lon"]
+
+        print(f"📌 Garden ID: {garden_id}, Lat: {lat}, Lon: {lon}")
+
+        # 🔥 Paramètres météo demandés
+        params = "t_2m:C,relative_humidity_2m:p,msl_pressure:hPa,uv:idx,weather_symbol_1h:idx"
+        now = datetime.datetime.now(pytz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        weather_url = f"{METEOMATICS_BASE_URL}/{now}/{params}/{lat},{lon}/json"
+
+        try:
+            response = requests.get(weather_url, auth=(METEOMATICS_USERNAME, METEOMATICS_PASSWORD))
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Error fetching live weather data: {str(e)}")
+            return jsonify({"error": "Failed to fetch live weather data", "details": str(e)}), 500
+
+        weather_data = response.json()
+
+        # 🔥 Structurer la réponse
+        live_weather_data = {}
+        for entry in weather_data.get("data", []):
+            parameter = entry["parameter"]
+            value = entry["coordinates"][0]["dates"][0]["value"]
+
+            if parameter == "t_2m:C":
+                live_weather_data["temperature"] = value
+            elif parameter == "relative_humidity_2m:p":
+                live_weather_data["humidity"] = value
+            elif parameter == "msl_pressure:hPa":
+                live_weather_data["pressure"] = value
+            elif parameter == "uv:idx":
+                live_weather_data["uv_index"] = value
+            elif parameter == "weather_symbol_1h:idx":
+                live_weather_data["weather_symbol"] = value
+            print(f"🌡️ Temperature: {live_weather_data.get('temperature')}°C")
+
+        return jsonify(live_weather_data), 200
+
+    except Exception as e:
+        print(f"❌ Error fetching live weather data: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+    
+
+# ✅ 📌 Route de récupération des données météoo
+@app.route('/get-weather-history', methods=['GET'])
+def get_weather_history():
+    try:
+        auth_header = request.headers.get("Authorization")
+        if not auth_header:
+            return jsonify({"error": "Missing Authorization Header"}), 401
+
+        token = auth_header.split(" ")[1]
+        decoded_token = auth.verify_id_token(token)
+        uid = decoded_token.get('uid')
+
+        if not uid:
+            return jsonify({"error": "Invalid token"}), 401
+
+        garden_id = request.args.get("gardenId")
+
+        if not garden_id:
+            return jsonify({"error": "Missing garden ID"}), 400
+
+        garden_ref = db.collection("users").document(uid).collection("gardens").document(garden_id)
+        weather_ref = garden_ref.collection("weather_data")
+
+        weather_docs = weather_ref.stream()
+
+        weather_history = []
+        for doc in weather_docs:
+            data = doc.to_dict()
+            if "data" in data:  # On s'assure que ce n'est pas "lastUpdate"
+                weather_history.append(data)
+
+        print(f"✅ Weather history retrieved for garden: {garden_id}")
+        print(f"📊 Total entries: {len(weather_history)}")
+
+        return jsonify(weather_history), 200
+
+    except Exception as e:
+        print(f"❌ Error fetching weather history: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+    
+# ✅ 📌 **Route pour récupérer les données en temps réel**
+@app.route('/live-sensor-data', methods=['GET'])
+def live_sensor_data():
+    try:
+        # 🔐 Vérifier le token Firebase
+        auth_header = request.headers.get("Authorization")
+        if not auth_header:
+            return jsonify({"error": "Missing Authorization Header"}), 401
+
+        token = auth_header.split(" ")[1]
+        decoded_token = auth.verify_id_token(token)
+        uid = decoded_token.get('uid')
+
+        if not uid:
+            return jsonify({"error": "Invalid token"}), 401
+
+        # 🔥 Pas besoin de sensorId, car les données live sont globales par utilisateur
+        sensor_ref = db.collection("test").document("Ua4bgGFb4ibdrZohzulN").collection("live").document("snapshot")
+        sensor_doc = sensor_ref.get()
+
+        if not sensor_doc.exists:
+            return jsonify({"error": "No live data available"}), 404
+
+        sensor_data = sensor_doc.to_dict()
+        return jsonify(sensor_data), 200
+
+    except Exception as e:
+        print(f"❌ Error fetching live sensor data: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ✅ 📌 **Route pour récupérer l'historique des capteurs**
+@app.route('/get-sensor-history', methods=['GET'])
+def get_sensor_history():
+    try:
+        # 🔐 Vérifier le token Firebase
+        auth_header = request.headers.get("Authorization")
+        if not auth_header:
+            return jsonify({"error": "Missing Authorization Header"}), 401
+
+        token = auth_header.split(" ")[1]
+        decoded_token = auth.verify_id_token(token)
+        uid = decoded_token.get('uid')
+
+        if not uid:
+            return jsonify({"error": "Invalid token"}), 401
+
+        # 🔥 Récupération du sensor ID et de la date
+        sensor_id = request.args.get("sensorId")
+        date = request.args.get("date")  # Format attendu "YYYY-MM-DD"
+        if not sensor_id or not date:
+            return jsonify({"error": "Missing sensor ID or date"}), 400
+
+        # 🔥 Construction du chemin Firestore
+        history_ref = db.collection("test").document(uid).collection("dates").document(date).collection("hours")
+
+        # 🔥 Récupérer toutes les heures enregistrées pour ce jour-là
+        history_docs = history_ref.stream()
+
+        history_data = {}
+        for doc in history_docs:
+            hour = doc.id
+            history_data[hour] = doc.to_dict()
+
+        return jsonify(history_data), 200
+
+    except Exception as e:
+        print(f"❌ Error fetching sensor history: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 # ✅ 📌 Route d'accueil
 @app.route("/", methods=["GET"])
